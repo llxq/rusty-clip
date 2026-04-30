@@ -1,0 +1,21 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rustyclip-body" x1="160" y1="92" x2="360" y2="404" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#59DAE8" />
+      <stop offset="1" stop-color="#1592A6" />
+    </linearGradient>
+    <linearGradient id="rustyclip-clip" x1="208" y1="68" x2="304" y2="152" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#BCF5FA" />
+      <stop offset="1" stop-color="#DDFBFD" />
+    </linearGradient>
+    <linearGradient id="rustyclip-arrow" x1="184" y1="304" x2="325" y2="271" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FEFF" />
+      <stop offset="1" stop-color="#DBF8FB" />
+    </linearGradient>
+  </defs>
+  <path d="M160 132C160 109.909 177.909 92 200 92H312C334.091 92 352 109.909 352 132V148H370C392.091 148 410 165.909 410 188V356C410 390.242 382.242 418 348 418H164C129.758 418 102 390.242 102 356V188C102 165.909 119.909 148 142 148H160V132Z" fill="url(#rustyclip-body)" />
+  <path d="M212 104C212 88.536 224.536 76 240 76H272C287.464 76 300 88.536 300 104V148H212V104Z" fill="url(#rustyclip-clip)" />
+  <rect x="168" y="198" width="174" height="20" rx="10" fill="#C5F5FA" fill-opacity="0.7" />
+  <rect x="168" y="236" width="132" height="18" rx="9" fill="#C5F5FA" fill-opacity="0.58" />
+  <path d="M180 324H242V292L312 344L242 396V364H206C181.699 364 162 344.301 162 320V306" stroke="url(#rustyclip-arrow)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
