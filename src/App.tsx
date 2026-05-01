@@ -288,11 +288,21 @@ const renderPreviewContent = (item: IClipboardHistoryItem, previewRef: React.Ref
 
   if (item.contentType === "file_list") {
     return (
-      <pre className="preview-text">{item.filePaths.length > 0 ? item.filePaths.join("\n") : "暂无文件路径"}</pre>
+      <pre onClick={() => {
+        void openPath(item.filePaths.join("\n"))
+      }} className="preview-text preview-link">{item.filePaths.length > 0 ? item.filePaths.join("\n") : "暂无文件路径"}</pre>
     );
   }
 
-  return <pre ref={previewRef} contentEditable suppressContentEditableWarning={true} className="preview-text">{item.textContent?.trim() || EMPTY_TEXT_MESSAGE}</pre>;
+  const content = item.textContent?.trim()
+  if (content && isLinkValue(content)) {
+    // 如果是链接，可以点击
+    return <pre className="preview-link preview-text" onClick={() => {
+      void openPath(content)
+    }}>{content}</pre>;
+  }
+
+  return <pre ref={previewRef} contentEditable suppressContentEditableWarning={true} className="preview-text">{content || EMPTY_TEXT_MESSAGE}</pre>;
 };
 
 const App = (): ReactElement => {

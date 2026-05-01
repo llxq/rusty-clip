@@ -635,6 +635,13 @@ select {
   line-height: 1.58;
 }
 
+.preview-link {
+    text-decoration: underline;
+    /* 蓝色 */
+    color: #007bff;
+    cursor: pointer;
+}
+
 @media (max-width: 960px) {
   .launcher-shell {
     padding: 16px;
