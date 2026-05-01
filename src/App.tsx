@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import { HISTORY_UPDATED_EVENT, LAUNCHER_SHOWN_EVENT } from "./constants/history";
 import type { IClipboardHistoryItem, TClipboardContentType } from "./types/clipboard";
+import { openPath } from '@tauri-apps/plugin-opener';
 
 type THistoryStatus = "idle" | "loading" | "refreshing";
 type TListGroupKey = "all" | "favorite" | TClipboardContentType | "link";
@@ -273,11 +274,13 @@ const renderListPreview = (item: IClipboardHistoryItem): ReactElement => {
   );
 };
 
-const renderPreviewContent = (item: IClipboardHistoryItem): ReactElement => {
+const renderPreviewContent = (item: IClipboardHistoryItem, previewRef: React.RefObject<HTMLPreElement | null>): ReactElement => {
   if (item.contentType === "image" && item.imagePath) {
     return (
       <div className="preview-content preview-content-image">
-        <img className="preview-image" src={convertFileSrc(item.imagePath)} alt="Clipboard preview" />
+        <img onClick={() => {
+          item.imagePath && openPath(item.imagePath)
+        }} className="preview-image" src={convertFileSrc(item.imagePath)} alt="Clipboard preview" />
         <pre className="preview-text">{item.imagePath || EMPTY_IMAGE_MESSAGE}</pre>
       </div>
     );
@@ -289,7 +292,7 @@ const renderPreviewContent = (item: IClipboardHistoryItem): ReactElement => {
     );
   }
 
-  return <pre className="preview-text">{item.textContent?.trim() || EMPTY_TEXT_MESSAGE}</pre>;
+  return <pre ref={previewRef} contentEditable suppressContentEditableWarning={true} className="preview-text">{item.textContent?.trim() || EMPTY_TEXT_MESSAGE}</pre>;
 };
 
 const App = (): ReactElement => {
@@ -668,7 +671,7 @@ const App = (): ReactElement => {
             ? null
             : visibleItems.find((item) => item.id === latestSelectedIdRef.current) ?? null;
 
-        if (!currentSelectedItem) {
+        if (!currentSelectedItem || document.activeElement === previewRef.current) {
           return;
         }
 
@@ -690,6 +693,16 @@ const App = (): ReactElement => {
       setSelectedId(filteredHistory[0]?.id ?? null);
     }
   };
+
+  const previewRef = useRef<HTMLPreElement | null>(null);
+  const customCopy = async () => {
+    if (previewRef.current) {
+      let content = previewRef.current.innerText
+      // 去除最后的换行
+      content = content.trimEnd()
+      await invoke("paste_custom_history", { content });
+    }
+  }
 
   return (
     <main className="launcher-shell">
@@ -869,7 +882,14 @@ const App = (): ReactElement => {
                   {selectedItem.isFavorite ? <span className="history-flag-pill">已收藏</span> : null}
                   <span className="history-time">{formatTimestamp(selectedItem.updatedAt)}</span>
                 </div>
-                <div className="preview-card">{renderPreviewContent(selectedItem)}</div>
+                <div className="preview-card">
+                  <div className="preview-content">
+                    {renderPreviewContent(selectedItem, previewRef)}
+                  </div>
+                  <div className="preview-footer">
+                    <button onClick={customCopy} type="button" className="preview-footer-button">复制</button>
+                  </div>
+                </div>
               </>
             ) : (
               <section className="empty-state empty-state-preview">

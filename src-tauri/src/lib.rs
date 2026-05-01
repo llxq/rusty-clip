@@ -2,7 +2,6 @@ mod clipboard_history;
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
-use std::string;
 #[cfg(desktop)]
 use std::sync::Mutex;
 #[cfg(desktop)]

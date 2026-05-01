@@ -578,8 +578,34 @@ select {
 .preview-card {
   min-height: 0;
   flex: 1;
-  padding: 14px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-content {
+  flex: 1;
   overflow: auto;
+  padding: 14px;
+}
+
+.preview-content pre {
+  outline: none;
+}
+
+.preview-footer {
+  padding: 12px;
+  text-align: right;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.preview-footer-button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(245, 248, 250, 0.94);
+  cursor: pointer;
 }
 
 .preview-content {
@@ -598,6 +624,7 @@ select {
   object-fit: contain;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
 }
 
 .preview-text {
