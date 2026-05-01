@@ -2,10 +2,10 @@ mod clipboard_history;
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
+use std::string;
 #[cfg(desktop)]
 use std::sync::Mutex;
 #[cfg(desktop)]
-use std::time::Duration;
 use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(target_os = "macos")]
@@ -23,7 +23,6 @@ use tauri::{
 #[cfg(desktop)]
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 #[cfg(desktop)]
-use tokio::time::sleep;
 
 #[cfg(desktop)]
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -390,6 +389,19 @@ async fn paste_history_into_previous_app(app: tauri::AppHandle, id: i64) -> Resu
     Ok(())
 }
 
+#[tauri::command]
+async fn paste_custom_history(app: tauri::AppHandle, content: &str) -> Result<(), String> {
+    let bundle_id = take_previous_frontmost_app_bundle_id(&app)?;
+    let window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .ok_or_else(|| "main window not found".to_string())?;
+
+    clipboard_history::copyt_custom_content_to_clipboard(content).await?;
+    paste_into_previous_app(bundle_id.as_deref())?;
+    window.hide().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[cfg(desktop)]
 fn toggle_launcher(app: &tauri::AppHandle) -> Result<(), String> {
     match app.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -591,6 +603,7 @@ pub fn run() {
             MacosLauncher::LaunchAgent, // macOS 启动方式
             Some(vec![]), // 启动参数
         ))
+        .plugin(tauri_plugin_opener::init()) // 必须初始化
         .manage(LauncherFocusState::default())
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW_LABEL {
@@ -660,6 +673,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             hide_launcher_window,
             paste_history_into_previous_app,
+            paste_custom_history,
             clipboard_history::list_clipboard_history,
             clipboard_history::copy_clipboard_history,
             clipboard_history::paste_clipboard_history,

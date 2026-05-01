@@ -644,6 +644,12 @@ async fn load_history_item(app: &AppHandle, id: i64) -> Result<IClipboardHistory
     })
 }
 
+pub async fn copyt_custom_content_to_clipboard(content: &str) -> Result<(), String> {
+    let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
+    clipboard.set_text(content).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
 async fn copy_history_item_to_clipboard(app: &AppHandle, id: i64) -> Result<(), String> {
     let item = load_history_item(app, id).await?;
     let payload = build_clipboard_write_payload(&item)?;
