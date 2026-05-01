@@ -6,6 +6,7 @@ use std::process::Command;
 use std::sync::Mutex;
 #[cfg(desktop)]
 use std::time::Duration;
+use tauri_plugin_autostart::MacosLauncher;
 
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
@@ -313,7 +314,7 @@ fn show_launcher(app: &tauri::AppHandle) -> Result<(), String> {
         .set_always_on_top(true)
         .map_err(|error| error.to_string())?;
     window
-        .set_background_color(Some(Color(255, 255, 255, 255)))
+        .set_background_color(Some(Color(0, 0, 0, 0)))
         .map_err(|error| error.to_string())?;
 
     #[cfg(target_os = "macos")]
@@ -383,10 +384,10 @@ async fn paste_history_into_previous_app(app: tauri::AppHandle, id: i64) -> Resu
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main window not found".to_string())?;
 
-    window.hide().map_err(|error| error.to_string())?;
     clipboard_history::write_history_item_to_clipboard(&app, id).await?;
-    sleep(Duration::from_millis(120)).await;
-    paste_into_previous_app(bundle_id.as_deref())
+    paste_into_previous_app(bundle_id.as_deref())?;
+    window.hide().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[cfg(desktop)]
@@ -586,6 +587,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(sql_plugin)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent, // macOS 启动方式
+            Some(vec![]), // 启动参数
+        ))
         .manage(LauncherFocusState::default())
         .on_window_event(|window, event| {
             if window.label() == MAIN_WINDOW_LABEL {

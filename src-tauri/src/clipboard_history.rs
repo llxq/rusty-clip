@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::Arc,
     thread,
@@ -16,11 +15,11 @@ use objc2_app_kit::NSPasteboard;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::{Pool, Row, Sqlite};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_sql::{DbInstances, DbPool, Migration, MigrationKind};
 use tokio::sync::{Mutex, OwnedMutexGuard};
-#[cfg(target_os = "macos")]
-use std::process::Command;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
 
@@ -32,6 +31,8 @@ const CONTENT_TYPE_IMAGE: &str = "image";
 const CONTENT_TYPE_TEXT: &str = "text";
 const IMAGE_DIR_NAME: &str = "clipboard-images";
 const POLL_INTERVAL_MS: u64 = 150;
+// 最多存储多少条数据
+const MAX_HISTORY_COUNT: i64 = 288;
 
 #[derive(Debug)]
 enum EClipboardPayload {
@@ -118,10 +119,11 @@ impl IWatcherState {
 }
 
 pub fn migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create clipboard_history table",
-        sql: r#"
+    vec![
+        Migration {
+            version: 1,
+            description: "create clipboard_history table",
+            sql: r#"
             CREATE TABLE IF NOT EXISTS clipboard_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content_type TEXT NOT NULL,
@@ -135,18 +137,20 @@ pub fn migrations() -> Vec<Migration> {
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_updated_at
             ON clipboard_history(updated_at DESC);
         "#,
-        kind: MigrationKind::Up,
-    }, Migration {
-        version: 2,
-        description: "add pinned and favorite flags to clipboard_history",
-        sql: r#"
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "add pinned and favorite flags to clipboard_history",
+            sql: r#"
             ALTER TABLE clipboard_history ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE clipboard_history ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0;
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_pinned_updated_at
             ON clipboard_history(is_pinned DESC, updated_at DESC);
         "#,
-        kind: MigrationKind::Up,
-    }]
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 pub fn setup(app: AppHandle) -> Result<(), String> {
@@ -257,7 +261,10 @@ fn read_clipboard_payload() -> Result<Option<EClipboardPayload>, String> {
     let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
     let file_paths = clipboard.get().file_list().ok().map(normalize_file_paths);
     let image_data = clipboard.get_image().ok();
-    let text = clipboard.get_text().ok().map(|value| normalize_text(&value));
+    let text = clipboard
+        .get_text()
+        .ok()
+        .map(|value| normalize_text(&value));
 
     build_clipboard_payload(IClipboardContents {
         file_paths,
@@ -266,7 +273,9 @@ fn read_clipboard_payload() -> Result<Option<EClipboardPayload>, String> {
     })
 }
 
-fn build_clipboard_payload(contents: IClipboardContents) -> Result<Option<EClipboardPayload>, String> {
+fn build_clipboard_payload(
+    contents: IClipboardContents,
+) -> Result<Option<EClipboardPayload>, String> {
     if let Some(file_paths) = contents.file_paths {
         if !file_paths.is_empty() {
             let file_paths_json = serde_json::to_vec(&file_paths).map_err(|err| err.to_string())?;
@@ -421,9 +430,7 @@ async fn get_sqlite_pool(app: &AppHandle) -> Result<Pool<Sqlite>, String> {
     Ok(pool.clone())
 }
 
-async fn acquire_mutation_lock(
-    app: &AppHandle,
-) -> Result<OwnedMutexGuard<()>, String> {
+async fn acquire_mutation_lock(app: &AppHandle) -> Result<OwnedMutexGuard<()>, String> {
     let Some(lock) = app.try_state::<IClipboardMutationLock>() else {
         return Err("clipboard mutation lock is not available".to_string());
     };
@@ -432,6 +439,24 @@ async fn acquire_mutation_lock(
 }
 
 async fn upsert_history_item(app: &AppHandle, payload: EClipboardPayload) -> Result<(), String> {
+    match &payload {
+        EClipboardPayload::Text { text_content, .. } => {
+            if text_content.trim().is_empty() {
+                return Ok(());
+            }
+        }
+        EClipboardPayload::Image { png_bytes, .. } => {
+            if png_bytes.is_empty() {
+                return Ok(());
+            }
+        }
+        EClipboardPayload::FileList { file_paths, .. } => {
+            if file_paths.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
     let _mutation_lock = acquire_mutation_lock(app).await?;
     let pool = get_sqlite_pool(app).await?;
     let now = now_timestamp();
@@ -468,6 +493,39 @@ async fn upsert_history_item(app: &AppHandle, payload: EClipboardPayload) -> Res
             content_hash,
         ),
     };
+
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM clipboard_history WHERE content_hash = ? LIMIT 1")
+            .bind(&content_hash)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+    if exists.is_some() {
+        // 👉 已存在：只更新时间
+        sqlx::query("UPDATE clipboard_history SET updated_at = ? WHERE content_hash = ?")
+            .bind(&now)
+            .bind(&content_hash)
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        emit_history_updated(app)?;
+        return Ok(());
+    }
+
+    // 查询出count数量
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clipboard_history")
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    if count >= MAX_HISTORY_COUNT {
+        // 删除最旧的一条
+        sqlx::query("DELETE FROM clipboard_history ORDER BY created_at ASC LIMIT 1")
+            .execute(&pool)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
 
     sqlx::query(
         r#"
@@ -531,12 +589,8 @@ async fn load_history(app: &AppHandle) -> Result<Vec<IClipboardHistoryItem>, Str
 
             Ok(IClipboardHistoryItem {
                 id: row.try_get("id").map_err(|err| err.to_string())?,
-                content_type: row
-                    .try_get("content_type")
-                    .map_err(|err| err.to_string())?,
-                text_content: row
-                    .try_get("text_content")
-                    .map_err(|err| err.to_string())?,
+                content_type: row.try_get("content_type").map_err(|err| err.to_string())?,
+                text_content: row.try_get("text_content").map_err(|err| err.to_string())?,
                 image_path: row.try_get("image_path").map_err(|err| err.to_string())?,
                 file_paths,
                 is_pinned: read_bool_column(&row, "is_pinned")?,
@@ -579,12 +633,8 @@ async fn load_history_item(app: &AppHandle, id: i64) -> Result<IClipboardHistory
 
     Ok(IClipboardHistoryItem {
         id: row.try_get("id").map_err(|err| err.to_string())?,
-        content_type: row
-            .try_get("content_type")
-            .map_err(|err| err.to_string())?,
-        text_content: row
-            .try_get("text_content")
-            .map_err(|err| err.to_string())?,
+        content_type: row.try_get("content_type").map_err(|err| err.to_string())?,
+        text_content: row.try_get("text_content").map_err(|err| err.to_string())?,
         image_path: row.try_get("image_path").map_err(|err| err.to_string())?,
         file_paths,
         is_pinned: read_bool_column(&row, "is_pinned")?,
@@ -600,9 +650,9 @@ async fn copy_history_item_to_clipboard(app: &AppHandle, id: i64) -> Result<(), 
     let mut clipboard = Clipboard::new().map_err(|err| err.to_string())?;
 
     match payload {
-        EClipboardWritePayload::Text { text_content } => {
-            clipboard.set_text(text_content).map_err(|err| err.to_string())?
-        }
+        EClipboardWritePayload::Text { text_content } => clipboard
+            .set_text(text_content)
+            .map_err(|err| err.to_string())?,
         EClipboardWritePayload::Image {
             rgba_bytes,
             width,
@@ -615,7 +665,10 @@ async fn copy_history_item_to_clipboard(app: &AppHandle, id: i64) -> Result<(), 
             })
             .map_err(|err| err.to_string())?,
         EClipboardWritePayload::FileList { file_paths } => {
-            let paths = file_paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+            let paths = file_paths
+                .into_iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
             clipboard
                 .set()
                 .file_list(&paths)
@@ -709,12 +762,16 @@ async fn clear_history_items(app: &AppHandle) -> Result<(), String> {
     let rows = sqlx::query(
         "SELECT image_path FROM clipboard_history WHERE is_favorite = 0 AND image_path IS NOT NULL",
     )
-        .fetch_all(&pool)
-        .await
-        .map_err(|err| err.to_string())?;
+    .fetch_all(&pool)
+    .await
+    .map_err(|err| err.to_string())?;
     let image_paths = rows
         .into_iter()
-        .filter_map(|row| row.try_get::<Option<String>, _>("image_path").ok().flatten())
+        .filter_map(|row| {
+            row.try_get::<Option<String>, _>("image_path")
+                .ok()
+                .flatten()
+        })
         .collect::<Vec<_>>();
 
     sqlx::query("DELETE FROM clipboard_history WHERE is_favorite = 0")
@@ -791,8 +848,8 @@ mod tests {
 
     use super::{
         build_clipboard_payload, build_clipboard_write_payload, normalize_file_paths,
-        IClipboardHistoryItem, IClipboardContents,
-        IClipboardMutationLock, IWatcherState, POLL_INTERVAL_MS,
+        IClipboardContents, IClipboardHistoryItem, IClipboardMutationLock, IWatcherState,
+        POLL_INTERVAL_MS,
     };
 
     #[test]
