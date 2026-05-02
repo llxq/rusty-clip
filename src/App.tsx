@@ -381,6 +381,7 @@ const App = (): ReactElement => {
       latestSortRef.current,
     );
 
+    setErrorState(null);
     setSelectedId(nextItems[0]?.id ?? null);
     focusSearchInput();
 
