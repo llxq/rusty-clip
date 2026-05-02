@@ -543,27 +543,37 @@ fn take_previous_frontmost_app_bundle_id(app: &tauri::AppHandle) -> Result<Optio
 
 #[cfg(target_os = "macos")]
 fn paste_into_previous_app(bundle_id: Option<&str>) -> Result<(), String> {
-    let mut command = Command::new("osascript");
+  let mut script = String::new();
 
-    if let Some(bundle_id) = bundle_id {
-        command.args(["-e", &format!(r#"tell application id "{}" to activate"#, bundle_id)]);
-        command.args(["-e", "delay 0.18"]);
-    }
+  if let Some(bundle_id) = bundle_id {
+    script.push_str(&format!(r#"
+            tell application id "{}"
+                activate
+            end tell
+            delay 0.5
+        "#, bundle_id));
+  }
 
-    command.args([
-        "-e",
-        r#"tell application "System Events" to keystroke "v" using command down"#,
-    ]);
+  script.push_str(r#"
+        tell application "System Events"
+            keystroke "v" using command down
+        end tell
+    "#);
 
-    let status = command
-        .status()
-        .map_err(|error| format!("failed to paste into previous app: {error}"))?;
+  let output = Command::new("osascript")
+    .arg("-e")
+    .arg(script)
+    .output()
+    .map_err(|e| e.to_string())?;
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("paste into previous app exited with status {status}"))
-    }
+  if output.status.success() {
+    Ok(())
+  } else {
+    Err(format!(
+      "osascript error:\n{}",
+      String::from_utf8_lossy(&output.stderr)
+    ))
+  }
 }
 
 #[cfg(target_os = "windows")]
