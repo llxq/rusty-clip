@@ -6,6 +6,8 @@ use std::process::Command;
 use std::sync::Mutex;
 #[cfg(desktop)]
 use tauri_plugin_autostart::MacosLauncher;
+#[cfg(desktop)]
+use tauri_plugin_autostart::ManagerExt;
 
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
@@ -644,6 +646,10 @@ pub fn run() {
             {
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(ActivationPolicy::Accessory);
+
+                if let Err(error) = app.handle().autolaunch().enable() {
+                    eprintln!("failed to enable autostart: {error}");
+                }
 
                 let toggle_shortcut = launcher_shortcut();
 
