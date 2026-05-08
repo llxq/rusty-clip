@@ -415,10 +415,6 @@ select {
   gap: 14px;
   cursor: default;
   align-items: center;
-  transition:
-    border-color 150ms ease,
-    background-color 150ms ease,
-    transform 150ms ease;
 }
 
 .launcher-item:hover {

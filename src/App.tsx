@@ -60,6 +60,8 @@ const SORT_OPTION_LABELS: Record<TListSortKey, string> = {
 
 const EMPTY_TEXT_MESSAGE = "这条文本记录为空。";
 const EMPTY_IMAGE_MESSAGE = "图片文件不可用。";
+const KEY_REPEAT_INITIAL_DELAY_MS = 140;
+const KEY_REPEAT_INTERVAL_MS = 45;
 
 const SearchIcon = (): ReactElement => (
   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -327,6 +329,10 @@ const App = (): ReactElement => {
   const latestGroupRef = useRef<TListGroupKey>("all");
   const latestSortRef = useRef<TListSortKey>("latest");
   const latestSelectedIdRef = useRef<number | null>(null);
+  const shouldResetSelectionRef = useRef<boolean>(true);
+  const keyRepeatTimeoutRef = useRef<number | null>(null);
+  const keyRepeatIntervalRef = useRef<number | null>(null);
+  const activeArrowKeyRef = useRef<"ArrowDown" | "ArrowUp" | null>(null);
 
   const formatErrorMessage = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
@@ -373,6 +379,44 @@ const App = (): ReactElement => {
     });
   };
 
+  const clearArrowKeyRepeat = (): void => {
+    if (keyRepeatTimeoutRef.current !== null) {
+      window.clearTimeout(keyRepeatTimeoutRef.current);
+      keyRepeatTimeoutRef.current = null;
+    }
+
+    if (keyRepeatIntervalRef.current !== null) {
+      window.clearInterval(keyRepeatIntervalRef.current);
+      keyRepeatIntervalRef.current = null;
+    }
+
+    activeArrowKeyRef.current = null;
+  };
+
+  const moveSelectionByOffset = (offset: number): void => {
+    const visibleItems = getVisibleHistoryItems(
+      latestHistoryRef.current,
+      latestQueryRef.current,
+      latestGroupRef.current,
+      latestSortRef.current,
+    );
+
+    if (visibleItems.length === 0) {
+      return;
+    }
+
+    const currentIndex =
+      latestSelectedIdRef.current === null
+        ? -1
+        : visibleItems.findIndex((item) => item.id === latestSelectedIdRef.current);
+    const nextIndex =
+      currentIndex < 0
+        ? 0
+        : (currentIndex + offset + visibleItems.length) % visibleItems.length;
+
+    setSelectedId(visibleItems[nextIndex]?.id ?? null);
+  };
+
   const resetLauncherView = (): void => {
     const nextItems = getVisibleHistoryItems(
       latestHistoryRef.current,
@@ -382,6 +426,7 @@ const App = (): ReactElement => {
     );
 
     setErrorState(null);
+    shouldResetSelectionRef.current = true;
     setSelectedId(nextItems[0]?.id ?? null);
     focusSearchInput();
 
@@ -620,6 +665,21 @@ const App = (): ReactElement => {
   }, [selectedId, selectedItem]);
 
   useEffect((): void => {
+    if (!shouldResetSelectionRef.current) {
+      return;
+    }
+
+    const nextSelectedId = filteredHistory[0]?.id ?? null;
+
+    shouldResetSelectionRef.current = false;
+    setSelectedId(nextSelectedId);
+
+    window.requestAnimationFrame(() => {
+      launcherListRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
+  }, [filteredHistory]);
+
+  useEffect((): void => {
     if (!selectedItem || !launcherListRef.current) {
       return;
     }
@@ -648,6 +708,26 @@ const App = (): ReactElement => {
         return;
       }
 
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+
+        const offset = event.key === "ArrowDown" ? 1 : -1;
+
+        if (activeArrowKeyRef.current !== event.key) {
+          clearArrowKeyRepeat();
+          activeArrowKeyRef.current = event.key;
+          moveSelectionByOffset(offset);
+          keyRepeatTimeoutRef.current = window.setTimeout(() => {
+            moveSelectionByOffset(offset);
+            keyRepeatIntervalRef.current = window.setInterval(() => {
+              moveSelectionByOffset(offset);
+            }, KEY_REPEAT_INTERVAL_MS);
+          }, KEY_REPEAT_INITIAL_DELAY_MS);
+        }
+
+        return;
+      }
+
       const visibleItems = getVisibleHistoryItems(
         latestHistoryRef.current,
         latestQueryRef.current,
@@ -656,23 +736,6 @@ const App = (): ReactElement => {
       );
 
       if (visibleItems.length === 0) {
-        return;
-      }
-
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-
-        const currentIndex =
-          latestSelectedIdRef.current === null
-            ? -1
-            : visibleItems.findIndex((item) => item.id === latestSelectedIdRef.current);
-        const offset = event.key === "ArrowDown" ? 1 : -1;
-        const nextIndex =
-          currentIndex < 0
-            ? 0
-            : (currentIndex + offset + visibleItems.length) % visibleItems.length;
-
-        setSelectedId(visibleItems[nextIndex]?.id ?? null);
         return;
       }
 
@@ -691,10 +754,25 @@ const App = (): ReactElement => {
       }
     };
 
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      if (event.key === activeArrowKeyRef.current) {
+        clearArrowKeyRepeat();
+      }
+    };
+
+    const handleWindowBlur = (): void => {
+      clearArrowKeyRepeat();
+    };
+
     window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
 
     return () => {
+      clearArrowKeyRepeat();
       window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
     };
   }, [isMutating]);
 
