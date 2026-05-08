@@ -519,12 +519,8 @@ async fn upsert_history_item(app: &AppHandle, payload: EClipboardPayload) -> Res
         .fetch_one(&pool)
         .await
         .map_err(|err| err.to_string())?;
-    if count >= MAX_HISTORY_COUNT {
-        // 删除最旧的一条
-        sqlx::query("DELETE FROM clipboard_history ORDER BY created_at ASC LIMIT 1")
-            .execute(&pool)
-            .await
-            .map_err(|err| err.to_string())?;
+    if should_reset_history_capacity(count) {
+        remove_oldest_history_item(&pool).await?;
     }
 
     sqlx::query(
@@ -556,6 +552,62 @@ async fn upsert_history_item(app: &AppHandle, payload: EClipboardPayload) -> Res
     emit_history_updated(app)?;
 
     Ok(())
+}
+
+async fn remove_oldest_history_item(pool: &Pool<Sqlite>) -> Result<(), String> {
+    let oldest_item = find_removable_history_item(pool).await?;
+
+    let Some(oldest_item) = oldest_item else {
+        return Ok(());
+    };
+
+    let oldest_id = oldest_item
+        .try_get::<i64, _>("id")
+        .map_err(|err| err.to_string())?;
+    let image_path = oldest_item
+        .try_get::<Option<String>, _>("image_path")
+        .map_err(|err| err.to_string())?;
+
+    sqlx::query("DELETE FROM clipboard_history WHERE id = ?")
+        .bind(oldest_id)
+        .execute(pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    if let Some(image_path) = image_path {
+        if let Err(err) = remove_image_file(&image_path) {
+            eprintln!("failed to remove clipboard image {image_path}: {err}");
+        }
+    }
+
+    Ok(())
+}
+
+async fn find_removable_history_item(
+    pool: &Pool<Sqlite>,
+) -> Result<Option<sqlx::sqlite::SqliteRow>, String> {
+    for where_clause in removal_query_priority() {
+        let query = format!(
+            r#"
+            SELECT id, image_path
+            FROM clipboard_history
+            {where_clause}
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            "#
+        );
+
+        let row = sqlx::query(&query)
+            .fetch_optional(pool)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if row.is_some() {
+            return Ok(row);
+        }
+    }
+
+    Ok(None)
 }
 
 async fn load_history(app: &AppHandle) -> Result<Vec<IClipboardHistoryItem>, String> {
@@ -681,6 +733,8 @@ async fn copy_history_item_to_clipboard(app: &AppHandle, id: i64) -> Result<(), 
                 .map_err(|err| err.to_string())?
         }
     }
+
+    touch_history_item(app, id).await?;
 
     Ok(())
 }
@@ -812,6 +866,39 @@ fn read_bool_column(row: &sqlx::sqlite::SqliteRow, column_name: &str) -> Result<
     Ok(value != 0)
 }
 
+async fn touch_history_item(app: &AppHandle, id: i64) -> Result<(), String> {
+    let _mutation_lock = acquire_mutation_lock(app).await?;
+    let pool = get_sqlite_pool(app).await?;
+    let now = now_timestamp();
+
+    let result = sqlx::query("UPDATE clipboard_history SET updated_at = ? WHERE id = ?")
+        .bind(&now)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    if result.rows_affected() == 0 {
+        return Err(format!("clipboard history item {id} not found"));
+    }
+
+    emit_history_updated(app)?;
+
+    Ok(())
+}
+
+fn should_reset_history_capacity(count: i64) -> bool {
+    count >= MAX_HISTORY_COUNT
+}
+
+fn removal_query_priority() -> [&'static str; 3] {
+    [
+        "WHERE is_favorite = 0 AND is_pinned = 0",
+        "WHERE is_favorite = 0",
+        "",
+    ]
+}
+
 async fn toggle_history_item_flag(
     app: &AppHandle,
     id: i64,
@@ -854,7 +941,8 @@ mod tests {
 
     use super::{
         build_clipboard_payload, build_clipboard_write_payload, normalize_file_paths,
-        IClipboardContents, IClipboardHistoryItem, IClipboardMutationLock, IWatcherState,
+        removal_query_priority, should_reset_history_capacity, IClipboardContents,
+        IClipboardHistoryItem, IClipboardMutationLock, IWatcherState, MAX_HISTORY_COUNT,
         POLL_INTERVAL_MS,
     };
 
@@ -1002,5 +1090,24 @@ mod tests {
         drop(first_guard);
 
         assert!(lock.0.try_lock().is_ok());
+    }
+
+    #[test]
+    fn history_capacity_resets_once_limit_is_reached() {
+        assert!(!should_reset_history_capacity(MAX_HISTORY_COUNT - 1));
+        assert!(should_reset_history_capacity(MAX_HISTORY_COUNT));
+        assert!(should_reset_history_capacity(MAX_HISTORY_COUNT + 1));
+    }
+
+    #[test]
+    fn removal_priority_skips_favorite_and_pinned_items_first() {
+        assert_eq!(
+            removal_query_priority(),
+            [
+                "WHERE is_favorite = 0 AND is_pinned = 0",
+                "WHERE is_favorite = 0",
+                "",
+            ]
+        );
     }
 }
