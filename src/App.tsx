@@ -606,18 +606,6 @@ const App = (): ReactElement => {
     };
   }, []);
 
-  useEffect((): (() => void) => {
-    const handleWindowFocus = (): void => {
-      resetLauncherView();
-    };
-
-    window.addEventListener("focus", handleWindowFocus);
-
-    return () => {
-      window.removeEventListener("focus", handleWindowFocus);
-    };
-  }, []);
-
   const filteredHistory = getVisibleHistoryItems(history, query, activeGroup, activeSort);
   const selectedItem =
     filteredHistory.find((item) => item.id === selectedId) ?? filteredHistory[0] ?? null;
